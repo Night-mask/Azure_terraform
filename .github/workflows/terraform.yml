@@ -1,0 +1,66 @@
+name: Terraform Drift Detection and Resolution
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_VERSION: 1.13.5
+  TF_WORKING_DIR: .
+
+jobs:
+  terraform:
+    name: Terraform Automation
+    runs-on: ubuntu-latest
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUB_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUB_ID }}
+          
+      - name: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: terraform plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan
+
+      - name: Terraform Plan (Check for Drift)
+        id: plan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          set +e
+          terraform plan -detailed-exitcode -no-color -out=tfplan.out
+          exit_code=$?
+          set -e
+          echo "exitcode=$exit_code" >> $GITHUB_OUTPUT
+
+      - name: Check for Drift
+        if: always()
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          exitcode=${{ steps.plan.outputs.exitcode }}
+          echo "Terraform plan exit code: $exitcode"
+          
+          if [ "$exitcode" -eq 2 ]; then
+            echo "Drift detected — applying fix..."
+            terraform apply -auto-approve tfplan.out
+          elif [ "$exitcode" -eq 0 ]; then
+            echo "No drift detected."
+          else
+            echo "Terraform plan failed."
+            exit 1
